@@ -38,7 +38,12 @@ export default function AudioCall() {
     // REPLACE with your Ngrok Backend URL
     socketRef.current = io(
       process.env.NEXT_PUBLIC_BACKEND_URL ??
-        "https://glycolic-coactive-janyce.ngrok-free.dev"
+        "https://glycolic-coactive-janyce.ngrok-free.dev",
+      {
+        extraHeaders: {
+          "ngrok-skip-browser-warning": "true",
+        },
+      }
     );
 
     const socket = socketRef.current;
