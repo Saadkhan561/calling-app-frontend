@@ -27,25 +27,45 @@ export default function AudioCall() {
     };
   }, []);
 
+  const bufferToBase64 = (buffer: ArrayBuffer) => {
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return window.btoa(binary);
+  };
+
   // --- CAPTURE RAW PCM AUDIO ---
   const startAudioProcessor = async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    // OpenAI Realtime requires 24kHz Mono
+    // Create AudioContext specifically at 24000Hz as OpenAI requires
     const audioCtx = new AudioContext({ sampleRate: 24000 });
     audioCtxRef.current = audioCtx;
 
     const source = audioCtx.createMediaStreamSource(stream);
+    // 4096 buffer size is standard
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
     processor.onaudioprocess = (e) => {
       if (!isTranslationEnabled) return;
 
-      const inputData = e.inputBuffer.getChannelData(0); // Float32 data
-      const pcm16 = convertFloat32ToInt16(inputData);
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(pcm16.buffer)));
+      const inputData = e.inputBuffer.getChannelData(0);
 
-      console.log("🎤 Sending Audio Chunk...");
+      // 1. Convert Float32 to Int16 PCM
+      const pcm16 = new Int16Array(inputData.length);
+      for (let i = 0; i < inputData.length; i++) {
+        // Clamp values between -1 and 1 and convert to 16-bit range
+        const s = Math.max(-1, Math.min(1, inputData[i]));
+        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+
+      // 2. Convert Int16Array Buffer to Base64 safely
+      const base64 = bufferToBase64(pcm16.buffer);
+
+      console.log("🎤 Audio captured, sending to backend...");
       socketRef.current?.emit("audio-chunk", { audio: base64 });
     };
 
