@@ -10,7 +10,12 @@ export default function AudioCall() {
 
   useEffect(() => {
     socketRef.current = io(
-      process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000"
+      process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000",
+      {
+        extraHeaders: {
+          "ngrok-skip-browser-warning": "true",
+        },
+      }
     ); // Update with your URL
 
     socketRef.current.on("translated-audio-chunk", (base64Audio: string) => {
