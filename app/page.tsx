@@ -9,7 +9,9 @@ export default function AudioCall() {
   const audioCtxRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
-    socketRef.current = io("http://localhost:5000"); // Update with your URL
+    socketRef.current = io(
+      process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000"
+    ); // Update with your URL
 
     socketRef.current.on("translated-audio-chunk", (base64Audio: string) => {
       console.log("🔊 Playback: Received audio chunk from AI");
