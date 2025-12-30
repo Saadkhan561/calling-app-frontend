@@ -1,132 +1,126 @@
 "use client";
-
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-
-// Define the shape of our socket messages
-interface OfferPayload {
-  offer: RTCSessionDescriptionInit;
-  roomId: string;
-}
-
-interface AnswerPayload {
-  answer: RTCSessionDescriptionInit;
-}
-
-interface IceCandidatePayload {
-  candidate: RTCIceCandidateInit;
-  roomId: string;
-}
-
-// STUN servers
-const iceServers: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-};
 
 export default function AudioCall() {
   const [roomId, setRoomId] = useState<string>("");
   const [isJoined, setIsJoined] = useState<boolean>(false);
+  const [targetLang, setTargetLang] = useState<string>("Spanish");
+  const [isTranslationEnabled, setIsTranslationEnabled] =
+    useState<boolean>(false);
 
-  // 1. Properly typed Refs
   const socketRef = useRef<Socket | null>(null);
   const localStream = useRef<MediaStream | null>(null);
   const peerConnection = useRef<RTCPeerConnection | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
 
   useEffect(() => {
-    // Initialize Socket
-    // REPLACE with your Ngrok Backend URL
     socketRef.current = io(
-      process.env.NEXT_PUBLIC_BACKEND_URL ??
-        "https://glycolic-coactive-janyce.ngrok-free.dev",
+      process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000",
       {
-        extraHeaders: {
-          "ngrok-skip-browser-warning": "true",
-        },
+        extraHeaders: { "ngrok-skip-browser-warning": "true" },
       }
     );
 
     const socket = socketRef.current;
-
     socket.on("user-joined", handleUserJoined);
     socket.on("offer", handleOffer);
     socket.on("answer", handleAnswer);
     socket.on("ice-candidate", handleIceCandidate);
 
+    // Listen for translated audio from the other person
+    socket.on("translated-audio-chunk", (base64Audio: string) => {
+      playTranslatedChunk(base64Audio);
+    });
+
     return () => {
-      socket.off("user-joined");
-      socket.off("offer");
-      socket.off("answer");
-      socket.off("ice-candidate");
       socket.disconnect();
     };
   }, [roomId]);
 
-  const setupMedia = async (): Promise<void> => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      localStream.current = stream;
-    } catch (err) {
-      console.error("Error accessing microphone:", err);
-      alert("Could not access microphone. Ensure you are on HTTPS.");
-    }
+  // --- TRANSLATION LOGIC ---
+  const startAudioStreaming = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Note: OpenAI Realtime prefers 24kHz Mono PCM, but for simplicity we use webm
+    const mediaRecorder = new MediaRecorder(stream);
+
+    mediaRecorder.ondataavailable = async (event) => {
+      if (event.data.size > 0 && isTranslationEnabled) {
+        const reader = new FileReader();
+        reader.readAsDataURL(event.data);
+        reader.onloadend = () => {
+          const base64data = (reader.result as string).split(",")[1];
+          socketRef.current?.emit("audio-chunk", {
+            audio: base64data,
+            targetLanguage: targetLang,
+          });
+        };
+      }
+    };
+    mediaRecorder.start(500); // Send every 500ms
+    mediaRecorderRef.current = mediaRecorder;
   };
 
-  const createPeerConnection = (): RTCPeerConnection => {
-    const pc = new RTCPeerConnection(iceServers);
+  const playTranslatedChunk = (base64: string) => {
+    const binary = atob(base64);
+    const array = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+    const blob = new Blob([array], { type: "audio/pcm" }); // Simplified
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.play();
+  };
 
-    // Add local tracks to the connection
-    if (localStream.current) {
-      localStream.current.getTracks().forEach((track: MediaStreamTrack) => {
-        if (localStream.current) {
-          pc.addTrack(track, localStream.current);
-        }
-      });
-    }
+  // --- EXISTING WEBRTC LOGIC ---
+  const setupMedia = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStream.current = stream;
+    if (isTranslationEnabled) startAudioStreaming();
+  };
 
-    // Listen for remote tracks
-    pc.ontrack = (event: RTCTrackEvent) => {
-      const [remoteStream] = event.streams;
+  const createPeerConnection = () => {
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    localStream.current
+      ?.getTracks()
+      .forEach((t) => pc.addTrack(t, localStream.current!));
+
+    pc.ontrack = (e) => {
       if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.srcObject = e.streams[0];
+        // If translating, we MUTE the direct P2P audio so we only hear the AI
+        remoteAudioRef.current.muted = isTranslationEnabled;
       }
     };
 
-    // Send ICE candidates to the other peer
-    pc.onicecandidate = (event: RTCPeerConnectionIceEvent) => {
-      if (event.candidate && socketRef.current) {
-        socketRef.current.emit("ice-candidate", {
-          candidate: event.candidate,
+    pc.onicecandidate = (e) => {
+      if (e.candidate)
+        socketRef.current?.emit("ice-candidate", {
+          candidate: e.candidate,
           roomId,
         });
-      }
     };
-
     peerConnection.current = pc;
     return pc;
   };
 
-  const joinRoom = async (): Promise<void> => {
-    if (!roomId) return alert("Enter room ID");
+  const joinRoom = async () => {
+    if (!roomId) return;
     await setupMedia();
-    if (socketRef.current) {
-      socketRef.current.emit("join-room", roomId);
-      setIsJoined(true);
-    }
+    socketRef.current?.emit("join-room", roomId);
+    setIsJoined(true);
   };
 
-  const handleUserJoined = async (): Promise<void> => {
+  const handleUserJoined = async () => {
     const pc = createPeerConnection();
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     socketRef.current?.emit("offer", { offer, roomId });
   };
 
-  const handleOffer = async ({
-    offer,
-  }: {
-    offer: RTCSessionDescriptionInit;
-  }): Promise<void> => {
+  const handleOffer = async ({ offer }: any) => {
     const pc = createPeerConnection();
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
@@ -134,83 +128,76 @@ export default function AudioCall() {
     socketRef.current?.emit("answer", { answer, roomId });
   };
 
-  const handleAnswer = async ({
-    answer,
-  }: {
-    answer: RTCSessionDescriptionInit;
-  }): Promise<void> => {
-    if (peerConnection.current) {
-      await peerConnection.current.setRemoteDescription(
-        new RTCSessionDescription(answer)
-      );
-    }
+  const handleAnswer = async ({ answer }: any) => {
+    await peerConnection.current?.setRemoteDescription(
+      new RTCSessionDescription(answer)
+    );
   };
 
-  const handleIceCandidate = async (
-    candidate: RTCIceCandidateInit
-  ): Promise<void> => {
-    if (peerConnection.current) {
-      try {
-        await peerConnection.current.addIceCandidate(
-          new RTCIceCandidate(candidate)
-        );
-      } catch (e) {
-        console.error("Error adding ice candidate", e);
-      }
-    }
+  const handleIceCandidate = async (candidate: any) => {
+    await peerConnection.current?.addIceCandidate(
+      new RTCIceCandidate(candidate)
+    );
   };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-4 bg-slate-900 text-white font-sans">
-      <div className="max-w-md w-full bg-slate-800 p-8 rounded-2xl shadow-xl border border-slate-700">
-        <h1 className="text-3xl font-extrabold mb-6 text-center bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
-          WebRTC Audio
+    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white p-6">
+      <div className="bg-slate-800 p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-700">
+        <h1 className="text-2xl font-bold mb-6 text-center text-blue-400">
+          AI Audio Translator
         </h1>
+
+        <div className="mb-6 space-y-4">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isTranslationEnabled}
+              onChange={(e) => setIsTranslationEnabled(e.target.checked)}
+              className="w-5 h-5"
+            />
+            <span>Enable Real-time Translation</span>
+          </label>
+
+          {isTranslationEnabled && (
+            <select
+              value={targetLang}
+              onChange={(e) => setTargetLang(e.target.value)}
+              className="w-full bg-slate-700 p-2 rounded border border-slate-600"
+            >
+              <option value="Spanish">Spanish</option>
+              <option value="French">French</option>
+              <option value="German">German</option>
+              <option value="Urdu">Urdu</option>
+            </select>
+          )}
+        </div>
 
         {!isJoined ? (
           <div className="flex flex-col gap-4">
             <input
-              className="p-3 bg-slate-700 border border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-              placeholder="Enter Room ID (e.g. 123)"
+              className="p-3 bg-slate-700 rounded border border-slate-600"
+              placeholder="Room ID"
               value={roomId}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                setRoomId(e.target.value)
-              }
+              onChange={(e) => setRoomId(e.target.value)}
             />
             <button
               onClick={joinRoom}
-              className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-lg transition-colors shadow-lg shadow-blue-900/20"
+              className="bg-blue-600 py-3 rounded-lg font-bold"
             >
               Start Call
             </button>
           </div>
         ) : (
-          <div className="text-center space-y-6">
-            <div className="flex justify-center">
-              <div className="relative">
-                <div className="absolute inset-0 bg-blue-500 rounded-full animate-ping opacity-20"></div>
-                <div className="relative bg-blue-600 p-8 rounded-full text-4xl shadow-inner">
-                  🎙️
-                </div>
-              </div>
+          <div className="text-center">
+            <div className="text-emerald-400 animate-pulse mb-4">
+              ● Live in Room {roomId}
             </div>
-            <div>
-              <p className="text-slate-400 text-sm uppercase tracking-widest mb-1">
-                Status
-              </p>
-              <p className="text-xl font-medium text-emerald-400">
-                Live in Room: {roomId}
-              </p>
-            </div>
-
             <button
               onClick={() => window.location.reload()}
-              className="text-slate-400 hover:text-red-400 text-sm underline transition-colors"
+              className="text-red-400 underline"
             >
-              End Connection
+              End Call
             </button>
-
-            {/* Hidden audio element to play the remote stream */}
             <audio ref={remoteAudioRef} autoPlay />
           </div>
         )}
