@@ -87,21 +87,29 @@ export default function AudioCall() {
   const playPCM = (base64: string) => {
     if (!audioCtxRef.current) return;
 
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    try {
+      const binary = window.atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
 
-    const pcm16 = new Int16Array(bytes.buffer);
-    const float32 = new Float32Array(pcm16.length);
-    for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768.0;
+      const pcm16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(pcm16.length);
 
-    const buffer = audioCtxRef.current.createBuffer(1, float32.length, 24000);
-    buffer.getChannelData(0).set(float32);
+      for (let i = 0; i < pcm16.length; i++) {
+        float32[i] = pcm16[i] / 32768.0;
+      }
 
-    const source = audioCtxRef.current.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioCtxRef.current.destination);
-    source.start();
+      const buffer = audioCtxRef.current.createBuffer(1, float32.length, 24000);
+      buffer.getChannelData(0).set(float32);
+
+      const source = audioCtxRef.current.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtxRef.current.destination);
+      source.start();
+      console.log("▶️ Playing translated chunk...");
+    } catch (err) {
+      console.error("Playback error:", err);
+    }
   };
 
   const joinCall = async () => {
