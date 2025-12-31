@@ -7,109 +7,190 @@ export default function AudioCall() {
   const [isJoined, setIsJoined] = useState(false);
   const socketRef = useRef<Socket | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const [transcriptions, setTranscriptions] = useState<
+    { text: string; sender: string }[]
+  >([]);
+  const roomIdRef = useRef("");
 
   useEffect(() => {
     socketRef.current = io(
       process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000",
-      {
-        extraHeaders: {
-          "ngrok-skip-browser-warning": "true",
-        },
-      }
-    ); // Update with your URL
+      { extraHeaders: { "ngrok-skip-browser-warning": "true" } }
+    );
 
-    socketRef.current.on("translated-audio-chunk", (base64Audio: string) => {
-      console.log("🔊 Playback: Received audio chunk from AI");
-      playPCM(base64Audio);
+    // Receive audio from other participants
+    socketRef.current.on("incoming-audio", (data) => {
+      // Ensure we are passing only the string
+      const base64String = typeof data === "string" ? data : data.audio;
+      if (base64String) {
+        playTranslatedAudio(base64String);
+      }
     });
+
+    // Listen for transcription updates
+    socketRef.current.on(
+      "new-transcription",
+      (data: { text: string; sender: string }) => {
+        console.log({ data });
+        setTranscriptions((prev) => [...prev, data]);
+      }
+    );
 
     return () => {
       socketRef.current?.disconnect();
     };
   }, []);
 
-  const startAudio = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const startAudio = async (currentRoomId: string) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    // 1. Initialize Audio Context at 24kHz
-    const audioCtx = new (window.AudioContext ||
-      (window as any).webkitAudioContext)({ sampleRate: 24000 });
-    audioCtxRef.current = audioCtx;
+      // Initialize Audio Context at 24kHz (or 44.1/48k for higher quality)
+      const audioCtx = new (window.AudioContext ||
+        (window as any).webkitAudioContext)({
+        sampleRate: 24000,
+      });
+      audioCtxRef.current = audioCtx;
 
-    // 2. Resume context (Browser requirement)
-    if (audioCtx.state === "suspended") await audioCtx.resume();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
 
-    const source = audioCtx.createMediaStreamSource(stream);
-    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      const source = audioCtx.createMediaStreamSource(stream);
+      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-    processor.onaudioprocess = (e) => {
-      const inputData = e.inputBuffer.getChannelData(0);
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
 
-      // Convert Float32 to Int16 PCM
-      const pcm16 = new Int16Array(inputData.length);
-      for (let i = 0; i < inputData.length; i++) {
-        const s = Math.max(-1, Math.min(1, inputData[i]));
-        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
+        // Convert Float32 to Int16 PCM
+        const pcm16 = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          const s = Math.max(-1, Math.min(1, inputData[i]));
+          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+        }
 
-      // Safe Base64 encoding
-      const binary = String.fromCharCode(...new Uint8Array(pcm16.buffer));
-      const base64 = window.btoa(binary);
+        // Safe Base64 encoding
+        const binary = String.fromCharCode(...new Uint8Array(pcm16.buffer));
+        const base64 = window.btoa(binary);
 
-      socketRef.current?.emit("audio-chunk", { audio: base64 });
-    };
+        // Emit to server with the room ID
+        socketRef.current?.emit("audio-chunk", {
+          roomId: currentRoomId,
+          audio: base64,
+        });
+      };
 
-    source.connect(processor);
-    processor.connect(audioCtx.destination);
-    console.log("🎙️ Mic active and streaming PCM...");
+      source.connect(processor);
+      processor.connect(audioCtx.destination);
+      console.log("🎙️ Mic relay active...");
+    } catch (err) {
+      console.error("Error accessing microphone:", err);
+    }
   };
 
-  const playPCM = (base64: string) => {
+  // const playPCM = (base64: string) => {
+  //   const ctx = audioCtxRef.current;
+  //   if (!ctx) return;
+
+  //   const binary = window.atob(base64);
+  //   const bytes = new Uint8Array(binary.length);
+  //   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+  //   const pcm16 = new Int16Array(bytes.buffer);
+  //   const float32 = new Float32Array(pcm16.length);
+  //   for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768.0;
+
+  //   const buffer = ctx.createBuffer(1, float32.length, 24000);
+  //   buffer.getChannelData(0).set(float32);
+
+  //   const source = ctx.createBufferSource();
+  //   source.buffer = buffer;
+  //   source.connect(ctx.destination);
+  //   source.start();
+  // };
+
+  const playTranslatedAudio = async (base64: string) => {
     const ctx = audioCtxRef.current;
     if (!ctx) return;
 
-    const binary = window.atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    try {
+      // 1. Verify if the string has a prefix and remove it
+      // Some libraries add "data:audio/mpeg;base64," to the start
+      const cleanBase64 = base64.includes(",") ? base64.split(",")[1] : base64;
 
-    const pcm16 = new Int16Array(bytes.buffer);
-    const float32 = new Float32Array(pcm16.length);
-    for (let i = 0; i < pcm16.length; i++) float32[i] = pcm16[i] / 32768.0;
+      // 2. Convert Base64 string to an ArrayBuffer
+      const binary = window.atob(cleanBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
 
-    const buffer = ctx.createBuffer(1, float32.length, 24000);
-    buffer.getChannelData(0).set(float32);
+      // 3. Use decodeAudioData (This handles MP3, WAV, etc. automatically)
+      // This replaces all the manual math (pcm16/32768)
+      const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
 
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    source.start();
+      // 4. Play the decoded buffer
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+      source.start();
+    } catch (error) {
+      console.error("Playback Error:", error);
+    }
+  };
+
+  const handleJoin = () => {
+    if (!roomId) return alert("Please enter a Room ID");
+
+    setIsJoined(true);
+    socketRef.current?.emit("join-room", roomId);
+    startAudio(roomId);
   };
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white">
       <div className="p-8 bg-slate-800 rounded-xl border border-slate-700 w-80 text-center">
-        <h1 className="text-xl font-bold mb-4">English Translator</h1>
+        <h1 className="text-xl font-bold mb-4">Voice Call Room</h1>
         {!isJoined ? (
           <>
             <input
-              className="w-full p-2 mb-4 bg-slate-700 rounded"
-              placeholder="Room ID"
+              className="w-full p-2 mb-4 bg-slate-700 rounded border border-slate-600 focus:outline-none focus:border-blue-500"
+              placeholder="Enter Room ID"
               value={roomId}
               onChange={(e) => setRoomId(e.target.value)}
             />
             <button
-              onClick={() => {
-                startAudio();
-                setIsJoined(true);
-                socketRef.current?.emit("join-room", roomId);
-              }}
-              className="w-full bg-blue-600 py-2 rounded font-bold"
+              onClick={handleJoin}
+              className="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold transition-colors"
             >
-              Join & Translate
+              Start Call
             </button>
           </>
         ) : (
-          <div className="text-emerald-400">● Live in Room {roomId}</div>
+          <div className="flex flex-col gap-4">
+            <div className="text-emerald-400 text-center font-bold">
+              ● Live in {roomId}
+            </div>
+
+            <div className="h-64 overflow-y-auto bg-slate-900 p-4 rounded border border-slate-700 text-sm">
+              <p className="text-slate-500 mb-2 italic text-xs">
+                Transcriptions will appear here...
+              </p>
+              {transcriptions.map((t, i) => (
+                <div key={i} className="mb-2">
+                  <span className="text-blue-400 font-bold">
+                    {t.sender === socketRef.current?.id ? "You" : "Them"}:{" "}
+                  </span>
+                  <span>{t.text}</span>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => window.location.reload()}
+              className="text-xs text-slate-500 underline"
+            >
+              Leave Call
+            </button>
+          </div>
         )}
       </div>
     </div>
