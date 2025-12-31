@@ -23,6 +23,7 @@ export default function AudioCall() {
       // Ensure we are passing only the string
       const base64String = typeof data === "string" ? data : data.audio;
       if (base64String) {
+        console.log(base64String);
         playTranslatedAudio(base64String);
         console.log(data.text);
       }
