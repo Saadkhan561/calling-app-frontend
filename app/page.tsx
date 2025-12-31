@@ -109,54 +109,40 @@ export default function AudioCall() {
   //   source.start();
   // };
 
-  const playTranslatedAudio = async (base64: string) => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) {
-      console.error("❌ AudioContext not initialized. Did you click Join?");
-      return;
-    }
-
-    // 1. IMPORTANT: Browsers often suspend the context. We must resume it.
-    if (ctx.state === "suspended") {
-      console.log("⚠️ AudioContext was suspended, resuming...");
-      await ctx.resume();
-    }
-
+  const playTranslatedAudio = (base64: string) => {
     try {
-      // 2. Clean Base64 (remove data:audio/mp3;base64, if exists)
+      // 1. Clean the string
       const cleanBase64 = base64.includes(",") ? base64.split(",")[1] : base64;
 
-      // 3. Convert Base64 to ArrayBuffer
+      // 2. Convert to Blob
       const binary = window.atob(cleanBase64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);
       }
+      const blob = new Blob([bytes], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
 
-      // 4. Decode the MP3/Audio data
-      // Use the .slice() to ensure a fresh buffer if needed
-      const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-      console.log(
-        "✅ Audio decoded successfully:",
-        audioBuffer.duration,
-        "seconds"
-      );
+      // 3. Play using standard Audio element
+      const audio = new Audio(url);
 
-      // 5. Create and play the source
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
+      // This often works even if AudioContext is suspended
+      // because the user already "interacted" by joining the room
+      audio.play().catch((err) => {
+        console.error(
+          "Playback failed. User may need to click the page again:",
+          err
+        );
+        // Fallback: If it fails, try to resume the context one more time
+        audioCtxRef.current?.resume();
+      });
 
-      // Optional: Add a GainNode to boost volume if it's too quiet
-      const gainNode = ctx.createGain();
-      gainNode.gain.value = 1.0; // 1.0 = 100% volume
+      // 4. Cleanup memory
+      audio.onended = () => URL.revokeObjectURL(url);
 
-      source.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
-      source.start(0);
-      console.log("🔊 Playback started!");
+      console.log("🔊 Playing AI voice...");
     } catch (error) {
-      console.error("❌ Playback Error:", error);
+      console.error("Decoding Error:", error);
     }
   };
 
