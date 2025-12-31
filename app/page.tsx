@@ -111,31 +111,52 @@ export default function AudioCall() {
 
   const playTranslatedAudio = async (base64: string) => {
     const ctx = audioCtxRef.current;
-    if (!ctx) return;
+    if (!ctx) {
+      console.error("❌ AudioContext not initialized. Did you click Join?");
+      return;
+    }
+
+    // 1. IMPORTANT: Browsers often suspend the context. We must resume it.
+    if (ctx.state === "suspended") {
+      console.log("⚠️ AudioContext was suspended, resuming...");
+      await ctx.resume();
+    }
 
     try {
-      // 1. Verify if the string has a prefix and remove it
-      // Some libraries add "data:audio/mpeg;base64," to the start
+      // 2. Clean Base64 (remove data:audio/mp3;base64, if exists)
       const cleanBase64 = base64.includes(",") ? base64.split(",")[1] : base64;
 
-      // 2. Convert Base64 string to an ArrayBuffer
+      // 3. Convert Base64 to ArrayBuffer
       const binary = window.atob(cleanBase64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);
       }
 
-      // 3. Use decodeAudioData (This handles MP3, WAV, etc. automatically)
-      // This replaces all the manual math (pcm16/32768)
-      const audioBuffer = await ctx.decodeAudioData(bytes.buffer);
+      // 4. Decode the MP3/Audio data
+      // Use the .slice() to ensure a fresh buffer if needed
+      const audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
+      console.log(
+        "✅ Audio decoded successfully:",
+        audioBuffer.duration,
+        "seconds"
+      );
 
-      // 4. Play the decoded buffer
+      // 5. Create and play the source
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-      source.start();
+
+      // Optional: Add a GainNode to boost volume if it's too quiet
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = 1.0; // 1.0 = 100% volume
+
+      source.connect(gainNode);
+      gainNode.connect(ctx.destination);
+
+      source.start(0);
+      console.log("🔊 Playback started!");
     } catch (error) {
-      console.error("Playback Error:", error);
+      console.error("❌ Playback Error:", error);
     }
   };
 
