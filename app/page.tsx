@@ -43,6 +43,8 @@ export default function AudioCall() {
     };
   }, []);
 
+  // commit
+
   // const startAudio = async (currentRoomId: string) => {
   //   try {
   //     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
