@@ -43,50 +43,50 @@ export default function AudioCall() {
     };
   }, []);
 
-  const startAudio = async (currentRoomId: string) => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  // const startAudio = async (currentRoomId: string) => {
+  //   try {
+  //     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // Initialize Audio Context at 24kHz (or 44.1/48k for higher quality)
-      const audioCtx = new (window.AudioContext ||
-        (window as any).webkitAudioContext)({
-        sampleRate: 24000,
-      });
-      audioCtxRef.current = audioCtx;
+  //     // Initialize Audio Context at 24kHz (or 44.1/48k for higher quality)
+  //     const audioCtx = new (window.AudioContext ||
+  //       (window as any).webkitAudioContext)({
+  //       sampleRate: 24000,
+  //     });
+  //     audioCtxRef.current = audioCtx;
 
-      if (audioCtx.state === "suspended") await audioCtx.resume();
+  //     if (audioCtx.state === "suspended") await audioCtx.resume();
 
-      const source = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  //     const source = audioCtx.createMediaStreamSource(stream);
+  //     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-      processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
+  //     processor.onaudioprocess = (e) => {
+  //       const inputData = e.inputBuffer.getChannelData(0);
 
-        // Convert Float32 to Int16 PCM
-        const pcm16 = new Int16Array(inputData.length);
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]));
-          pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-        }
+  //       // Convert Float32 to Int16 PCM
+  //       const pcm16 = new Int16Array(inputData.length);
+  //       for (let i = 0; i < inputData.length; i++) {
+  //         const s = Math.max(-1, Math.min(1, inputData[i]));
+  //         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  //       }
 
-        // Safe Base64 encoding
-        const binary = String.fromCharCode(...new Uint8Array(pcm16.buffer));
-        const base64 = window.btoa(binary);
+  //       // Safe Base64 encoding
+  //       const binary = String.fromCharCode(...new Uint8Array(pcm16.buffer));
+  //       const base64 = window.btoa(binary);
 
-        // Emit to server with the room ID
-        socketRef.current?.emit("audio-chunk", {
-          roomId: currentRoomId,
-          audio: base64,
-        });
-      };
+  //       // Emit to server with the room ID
+  //       socketRef.current?.emit("audio-chunk", {
+  //         roomId: currentRoomId,
+  //         audio: base64,
+  //       });
+  //     };
 
-      source.connect(processor);
-      processor.connect(audioCtx.destination);
-      console.log("🎙️ Mic relay active...");
-    } catch (err) {
-      console.error("Error accessing microphone:", err);
-    }
-  };
+  //     source.connect(processor);
+  //     processor.connect(audioCtx.destination);
+  //     console.log("🎙️ Mic relay active...");
+  //   } catch (err) {
+  //     console.error("Error accessing microphone:", err);
+  //   }
+  // };
 
   // const playPCM = (base64: string) => {
   //   const ctx = audioCtxRef.current;
@@ -108,6 +108,50 @@ export default function AudioCall() {
   //   source.connect(ctx.destination);
   //   source.start();
   // };
+
+  const startAudio = async (currentRoomId: string) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      const audioCtx = new (window.AudioContext ||
+        (window as any).webkitAudioContext)({
+        sampleRate: 24000,
+      });
+      audioCtxRef.current = audioCtx;
+
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+
+      // 1. Load the Worklet module from the public folder
+      await audioCtx.audioWorklet.addModule("/pcm-processor.js");
+
+      const source = audioCtx.createMediaStreamSource(stream);
+
+      // 2. Create the Worklet Node
+      const workletNode = new AudioWorkletNode(audioCtx, "pcm-processor");
+
+      // 3. Listen for PCM data coming from the Worklet
+      workletNode.port.onmessage = (event) => {
+        const pcmBuffer = event.data;
+
+        // Safe Base64 encoding
+        const binary = String.fromCharCode(...new Uint8Array(pcmBuffer));
+        const base64 = window.btoa(binary);
+
+        // Emit to server
+        socketRef.current?.emit("audio-chunk", {
+          roomId: currentRoomId,
+          audio: base64,
+        });
+      };
+
+      source.connect(workletNode);
+      workletNode.connect(audioCtx.destination);
+
+      console.log("🎙️ AudioWorklet active (Lower latency)...");
+    } catch (err) {
+      console.error("Error accessing microphone:", err);
+    }
+  };
 
   const playTranslatedAudio = (base64: string) => {
     try {
