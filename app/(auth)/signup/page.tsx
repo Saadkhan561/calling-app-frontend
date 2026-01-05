@@ -22,7 +22,7 @@ export default function SignupPage() {
   const [formData, setFormData] = useState({
     name: "",
     email: "",
-    preferedLanguage: "",
+    preferredLanguage: "",
   });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,7 +50,7 @@ export default function SignupPage() {
       }
 
       // After successful signup, automatically login
-      const loginResponse = await fetch(`${backendUrl}/login`, {
+      const loginResponse = await fetch(`${backendUrl}/users/login`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -125,9 +125,9 @@ export default function SignupPage() {
             <select
               id="language"
               required
-              value={formData.preferedLanguage}
+              value={formData.preferredLanguage}
               onChange={(e) =>
-                setFormData({ ...formData, preferedLanguage: e.target.value })
+                setFormData({ ...formData, preferredLanguage: e.target.value })
               }
               className="w-full p-2 bg-slate-700 rounded border border-slate-600 focus:outline-none focus:border-blue-500"
             >
