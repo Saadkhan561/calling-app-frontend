@@ -1,7 +1,7 @@
 "use client";
+import { getCookie } from "cookies-next";
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { getCookie } from "cookies-next";
 
 export default function AudioCall() {
   const [roomId, setRoomId] = useState("");
@@ -11,7 +11,6 @@ export default function AudioCall() {
   const [transcriptions, setTranscriptions] = useState<
     { text: string; sender: string }[]
   >([]);
-  const roomIdRef = useRef("");
 
   useEffect(() => {
     socketRef.current = io(
