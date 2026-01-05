@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
+import { getCookie } from "cookies-next";
 
 export default function AudioCall() {
   const [roomId, setRoomId] = useState("");
@@ -15,7 +16,12 @@ export default function AudioCall() {
   useEffect(() => {
     socketRef.current = io(
       process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000",
-      { extraHeaders: { "ngrok-skip-browser-warning": "true" } }
+      {
+        auth: {
+          token: getCookie("token"),
+        },
+        extraHeaders: { "ngrok-skip-browser-warning": "true" },
+      }
     );
 
     // Receive audio from other participants
