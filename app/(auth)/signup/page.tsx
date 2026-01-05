@@ -34,7 +34,7 @@ export default function SignupPage() {
     try {
       const backendUrl =
         process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
-      const response = await fetch(`${backendUrl}/`, {
+      const response = await fetch(`${backendUrl}/users`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -167,4 +167,3 @@ export default function SignupPage() {
     </div>
   );
 }
-
