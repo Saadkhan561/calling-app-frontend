@@ -1,5 +1,6 @@
 "use client";
-import { getCookie } from "cookies-next";
+import { deleteCookie, getCookie } from "cookies-next";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 
@@ -11,6 +12,8 @@ export default function AudioCall() {
   const [transcriptions, setTranscriptions] = useState<
     { text: string; sender: string }[]
   >([]);
+
+  const router = useRouter();
 
   useEffect(() => {
     socketRef.current = io(
@@ -137,6 +140,11 @@ export default function AudioCall() {
     startAudio(roomId);
   };
 
+  const handlelogout = () => {
+    deleteCookie("token");
+    router.push("/login");
+  };
+
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white">
       <div className="p-8 bg-slate-800 rounded-xl border border-slate-700 w-80 text-center">
@@ -154,6 +162,12 @@ export default function AudioCall() {
               className="w-full bg-blue-600 hover:bg-blue-700 py-2 rounded font-bold transition-colors"
             >
               Start Call
+            </button>
+            <button
+              className="text-white bg-red-500 p-4 rounded-lg"
+              onClick={handlelogout}
+            >
+              Logout
             </button>
           </>
         ) : (
